@@ -13,9 +13,9 @@ BATCH_SIZE = 120
 EPOCHS = 200
 VALIDATION_SET_PERCENT = 0.2
 EPOCHS_PATIENCE = 10
-LR = 0.5
+LR = 0.1
 MOMENTUM_BETA = 0.9
-LR_DECAY_RATE = 0.0001
+LR_DECAY_RATE = 0.001
 HIDDEN_LAYERS = 2
 HIDDEN_LAYER_NEURONS = 6
 
@@ -117,8 +117,8 @@ def neural_net(data: np.ndarray) -> NeuralNetResult:
                 z_grad = relu_gradient(z_layers[li].T) * a_in_grad
 
             b_grad = z_grad.sum(axis=0)
-            v_biases[li] = MOMENTUM_BETA * v_biases[li] + (1 - MOMENTUM_BETA) * b_grad
-            biases[li] -= lr * v_biases[li]
+            v_biases[li] = MOMENTUM_BETA * v_biases[li] + (1 - MOMENTUM_BETA) * np.square(b_grad)
+            biases[li] -= lr * (b_grad / (np.sqrt(v_biases[li] + 1e-8)))
 
             if li > 0:
                 a_prev = np.maximum(0, z_layers[li - 1]).T
@@ -127,8 +127,8 @@ def neural_net(data: np.ndarray) -> NeuralNetResult:
                 a_prev = batch_x
 
             w_grad = z_grad.T @ a_prev
-            v_weights[li] = MOMENTUM_BETA * v_weights[li] + (1 - MOMENTUM_BETA) * w_grad
-            weights[li] -= lr * v_weights[li]
+            v_weights[li] = MOMENTUM_BETA * v_weights[li] + (1 - MOMENTUM_BETA) * np.square(w_grad)
+            weights[li] -= lr * (w_grad / (np.sqrt(v_weights[li] + 1e-8)))
 
         # New Loss
         out = np.squeeze(out)
