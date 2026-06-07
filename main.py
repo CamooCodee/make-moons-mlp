@@ -9,19 +9,176 @@ from pydantic import BaseModel
 from pydantic_numpy.typing import NpNDArray
 
 N = 5000
+BATCH_SIZE = 120
+EPOCHS = 250
 VALIDATION_SET_PERCENT = 0.2
-STEPS = 50000
-PATIENCE = 150
-LR = 0.01
-LR_DECAY_RATE = 0.0001
-HIDDEN_LAYERS = 3
-HIDDEN_LAYER_NEURONS = 24
+EPOCHS_PATIENCE = 3
+LR = 0.5
+LR_DECAY_RATE = 0.00015
+HIDDEN_LAYERS = 2
+HIDDEN_LAYER_NEURONS = 6
 
 class NeuralNetResult(BaseModel):
     weights: list[NpNDArray]
     biases: list[NpNDArray]
     loss_over_steps: NpNDArray
 
+def inference(weights: list, biases: list, input: np.ndarray) -> np.ndarray:
+    out = input.T
+    layers = len(weights)
+
+    for j in range(layers):
+        input = out
+        out = weights[j] @ input + biases[j][:, np.newaxis]
+
+        if j == layers - 1:
+            out = sigmoid(out)
+        else:
+            out = np.tanh(out)
+
+    return np.squeeze(out)
+
+def neural_net(data: np.ndarray) -> NeuralNetResult:
+    """Returns loss and validation loss over steps. (loss type, step)"""
+    validation_set_size = math.floor(N * VALIDATION_SET_PERCENT)
+    validation_set = data[:validation_set_size]
+    data = data[validation_set_size:]
+    training_set_size = N - validation_set_size
+
+    hidden_layer_neurons = HIDDEN_LAYER_NEURONS
+    hidden_layer_count = HIDDEN_LAYERS
+
+    feature_count = data.shape[1] - 1 # -1 since the last column is y
+    x = data[:, :2]
+    y = data[:, -1]
+    rng = default_rng(67)
+    weights = []
+    biases = []
+
+    best_weights = []
+    best_biases = []
+    loss_values = []
+    validation_loss_values = []
+    smallest_validation_loss_step = 0
+    smallest_validation_loss = 9999
+
+    patience_count = 0
+
+    for i in range(hidden_layer_count):
+        inputs = hidden_layer_neurons if i > 0 else feature_count
+        weights.append(rng.uniform(low=-1, high=1, size=(hidden_layer_neurons, inputs)))
+        biases.append(rng.uniform(low=-1, high=1, size=hidden_layer_neurons))
+
+    weights.append(rng.uniform(low=-1, high=1, size=(1, hidden_layer_neurons)))
+    biases.append(np.array([0.67]))
+
+    steps_per_epoch = math.ceil(training_set_size / BATCH_SIZE)
+    steps = EPOCHS * steps_per_epoch
+
+    print(f"Dataset Size: {training_set_size}")
+    print(f"Batch Size: {BATCH_SIZE}")
+    print(f"Epochs: {EPOCHS}")
+    print(f"Steps per Epoch: {steps_per_epoch}")
+    print(f"Max steps: {steps}")
+
+    epoch_loss = 0
+
+    for i in range(steps):
+        batch_index = i % steps_per_epoch
+        bottom = batch_index * BATCH_SIZE
+        top = min(bottom + BATCH_SIZE, training_set_size)
+        batch_x = x[bottom:top, :]
+        batch_y = y[bottom:top]
+
+        # Forward Pass
+        z_layers, out = forward_pass(batch_x, weights, biases)
+
+        # Backward Pass
+        a_in_grad = np.empty
+        lr = LR / (1 + LR_DECAY_RATE * i)
+
+        for li in reversed(range(hidden_layer_count + 1)):
+            if li == hidden_layer_count:
+                z_grad = (sigmoid(z_layers[li]) - batch_y) / batch_x.shape[0]
+                z_grad = z_grad.T
+            else:
+                z_grad = tanh_gradient(z_layers[li].T) * a_in_grad
+
+            b_grad = z_grad.sum(axis=0)
+            biases[li] -= b_grad * lr
+
+            if li > 0:
+                a_prev = np.tanh(z_layers[li - 1]).T
+                a_in_grad = z_grad @ weights[li]
+            else:
+                a_prev = batch_x
+            w_grad = z_grad.T @ a_prev
+
+            weights[li] -= w_grad * lr
+
+        # New Loss
+        out = np.squeeze(out)
+        l = loss(batch_y, out)
+        epoch_loss += l
+
+        if batch_index == steps_per_epoch -1:
+            loss_values.append(epoch_loss / steps_per_epoch)
+            epoch_loss = 0
+
+            validation_out = inference(weights, biases, validation_set[:, :-1])
+            validation_l = loss(validation_set[:, -1], validation_out)
+            validation_loss_values.append(validation_l)
+
+            if validation_l < smallest_validation_loss:
+                smallest_validation_loss_step = i + 1
+                smallest_validation_loss = validation_l
+                best_biases = copy.deepcopy(biases)
+                best_weights = copy.deepcopy(weights)
+                patience_count = 0
+            else:
+                patience_count += 1
+
+            if patience_count >= EPOCHS_PATIENCE:
+                print(f"EXIT AT: {i} with weights from {smallest_validation_loss_step}")
+                break
+
+    biases = best_biases
+    weights = best_weights
+    print(f"Smallest validation loss at step {smallest_validation_loss_step} and epoch {smallest_validation_loss_step / steps_per_epoch}: {smallest_validation_loss}")
+
+    loss_over_steps = np.array([loss_values, validation_loss_values])
+    return NeuralNetResult(weights=weights, biases=biases, loss_over_steps=loss_over_steps)
+
+def forward_pass(x: np.ndarray, weights: list[np.ndarray], biases: list[np.ndarray]) -> tuple[list[np.ndarray], np.ndarray]:
+    out = x.T
+    layers = len(weights)
+    z_layers = []
+
+    for j in range(layers):
+        input = out
+        out = weights[j] @ input + biases[j][:, np.newaxis]
+
+        z_layers.append(out.copy())
+
+        if j == layers - 1:
+            out = sigmoid(out)
+        else:
+            out = np.tanh(out)
+
+    return z_layers, out
+
+# Binary Cross Entropy
+def loss(gt: np.ndarray, out: np.ndarray) -> float:
+    return -(gt * np.log(out) + (1 - gt) * np.log(1 - out)).mean()
+
+def tanh_gradient(v: np.ndarray) -> np.ndarray:
+    return (1 - np.square(np.tanh(v)))
+
+def sigmoid(x):
+    return 1 / (1 + np.exp(-x))
+
+def logit(x):
+    return np.log(x / 1-x)
 
 def main():
     fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(18, 8))
@@ -61,22 +218,22 @@ def main():
     print("\n\n")
 
     inputs = np.array([
-        [2.5, -0.1],
-        [1, -0.1],
-        [1, -0.25],
-        [1, -0.35],
-        [0.07, 0.6],
-        [-0.6, -0.12],
-        [-0.4, 0.235],
-        [-0.2, 0.532],
-        [0, 0.645],
+        # [2.5, -0.1],
+        # [1, -0.1],
+        # [1, -0.25],
+        # [1, -0.35],
+        # [0.07, 0.6],
+        # [-0.6, -0.12],
+        # [-0.4, 0.235],
+        # [-0.2, 0.532],
+        # [0, 0.645],
         [0.2, 0.562],
-        [0.4, 0.37],
-        [0.6, 0.14],
-        [0.9, -0.12],
-        [1.2, -0.05],
-        [1.5, 0.43],
-        [1.7, 0.79],
+        # [0.4, 0.37],
+        # [0.6, 0.14],
+        # [0.9, -0.12],
+        # [1.2, -0.05],
+        # [1.5, 0.43],
+        # [1.7, 0.79],
     ])
 
     for i in inputs:
@@ -92,145 +249,6 @@ def main():
     axes[1].plot(steps, l[1, :], color="green")
 
     plt.show()
-
-def inference(weights: list, biases: list, input: np.ndarray) -> np.ndarray:
-    out = input.T
-    layers = len(weights)
-
-    for j in range(layers):
-        input = out
-        out = weights[j] @ input + biases[j][:, np.newaxis]
-
-        if j == layers - 1:
-            out = sigmoid(out)
-        else:
-            out = np.tanh(out)
-
-    return np.squeeze(out)
-
-
-def neural_net(data: np.ndarray) -> NeuralNetResult:
-    """Returns loss and validation loss over steps. (loss type, step)"""
-    validation_set_size = math.floor(N * VALIDATION_SET_PERCENT)
-    validation_set = data[:validation_set_size]
-    data = data[validation_set_size:]
-
-    hidden_layer_neurons = HIDDEN_LAYER_NEURONS
-    hidden_layer_count = HIDDEN_LAYERS
-
-    feature_count = data.shape[1] - 1 # -1 since the last column is y
-    x = data[:, :2]
-    y = data[:, -1]
-    rng = default_rng(67)
-    weights = []
-    biases = []
-
-    best_weights = []
-    best_biases = []
-    loss_values = []
-    validation_loss_values = []
-    smallest_validation_loss_step = 0
-    smallest_validation_loss = 9999
-
-    patience_count = 0
-
-    for i in range(hidden_layer_count):
-        inputs = hidden_layer_neurons if i > 0 else feature_count
-        weights.append(rng.uniform(low=-1, high=1, size=(hidden_layer_neurons, inputs)))
-        biases.append(rng.uniform(low=-1, high=1, size=hidden_layer_neurons))
-
-    weights.append(rng.uniform(low=-1, high=1, size=(1, hidden_layer_neurons)))
-    biases.append(np.array([0.67]))
-
-    for i in range(STEPS):
-        # Forward Pass
-        z_layers, out = forward_pass(x, weights, biases)
-
-        # Loss
-        out = np.squeeze(out)
-        l = loss(y, out)
-
-        validation_out = inference(weights, biases, validation_set[:, :-1])
-        validation_l = loss(validation_set[:, -1] , validation_out)
-        # print(f"{i}. Loss: {l} Validation Loss: {validation_l}")
-
-        loss_values.append(l)
-        validation_loss_values.append(validation_l)
-
-        if validation_l < smallest_validation_loss:
-            smallest_validation_loss_step = i
-            smallest_validation_loss = validation_l
-            best_biases = copy.deepcopy(biases)
-            best_weights = copy.deepcopy(weights)
-            patience_count = 0
-        else:
-            patience_count += 1
-
-        if patience_count >= PATIENCE:
-            print(f"EXIT AT: {i} with weights from {smallest_validation_loss_step}")
-            biases = best_biases
-            weights = best_weights
-            break
-
-        # Backward Pass
-        a_in_grad = np.empty
-        lr = LR / (1 + LR_DECAY_RATE * i)
-
-        for li in reversed(range(hidden_layer_count + 1)):
-            if li == hidden_layer_count:
-                z_grad = (sigmoid(z_layers[li]) - y) / data.shape[0]
-                z_grad = z_grad.T
-            else:
-                z_grad = tanh_gradient(z_layers[li].T) * a_in_grad
-
-            b_grad = z_grad.sum(axis=0)
-            biases[li] -= b_grad * lr
-
-            if li > 0:
-                a_prev = np.tanh(z_layers[li - 1]).T
-                a_in_grad = z_grad @ weights[li]
-            else:
-                a_prev = x
-            w_grad = z_grad.T @ a_prev
-
-            weights[li] -= w_grad * lr
-
-
-    print(f"Smallest validation loss at step {smallest_validation_loss_step}: {smallest_validation_loss}")
-
-    loss_over_steps = np.array([loss_values, validation_loss_values])
-    return NeuralNetResult(weights=weights, biases=biases, loss_over_steps=loss_over_steps)
-
-def forward_pass(x: np.ndarray, weights: list[np.ndarray], biases: list[np.ndarray]) -> tuple[list[np.ndarray], np.ndarray]:
-    out = x.T
-    layers = len(weights)
-    z_layers = []
-
-    for j in range(layers):
-        input = out
-        out = weights[j] @ input + biases[j][:, np.newaxis]
-
-        z_layers.append(out.copy())
-
-        if j == layers - 1:
-            out = sigmoid(out)
-        else:
-            out = np.tanh(out)
-
-    return z_layers, out
-
-# Binary Cross Entropy
-def loss(gt: np.ndarray, out: np.ndarray) -> float:
-    return -(gt * np.log(out) + (1 - gt) * np.log(1 - out)).mean()
-
-def tanh_gradient(v: np.ndarray) -> np.ndarray:
-    return (1 - np.square(np.tanh(v)))
-
-def sigmoid(x):
-    return 1 / (1 + np.exp(-x))
-
-def logit(x):
-    return np.log(x / 1-x)
 
 
 if __name__ == "__main__":
