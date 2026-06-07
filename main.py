@@ -7,7 +7,8 @@ from numpy.random import default_rng
 from pydantic import BaseModel
 from pydantic_numpy.typing import NpNDArray
 
-N = 500
+N = 5000
+STEPS = 1000000
 
 class NeuralNetResult(BaseModel):
     weights: list[NpNDArray]
@@ -16,8 +17,8 @@ class NeuralNetResult(BaseModel):
 
 
 def main():
-    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(22, 8))
-    data = sklearn.datasets.make_moons(n_samples=N, noise=0.2, random_state=67)
+    fig, axes = plt.subplots(nrows=1, ncols=2, figsize=(18, 8))
+    data = sklearn.datasets.make_moons(n_samples=N, noise=0.2, random_state=68)
     (x, y) = data
     npdata = np.column_stack(data)
 
@@ -36,7 +37,7 @@ def main():
 
     print(x.shape)
 
-    axes[0].scatter(x=x[:, 0], y=x[:, 1], c=c, s=5)
+    axes[0].scatter(x=x[:, 0], y=x[:, 1], c=c, s=6)
 
     print("-- Data")
     print(npdata.shape)
@@ -58,6 +59,17 @@ def main():
         [1, -0.25],
         [1, -0.35],
         [0.07, 0.6],
+        [-0.6, -0.12],
+        [-0.4, 0.235],
+        [-0.2, 0.532],
+        [0, 0.645],
+        [0.2, 0.562],
+        [0.4, 0.37],
+        [0.6, 0.14],
+        [0.9, -0.12],
+        [1.2, -0.05],
+        [1.5, 0.43],
+        [1.7, 0.79],
     ])
 
     for i in inputs:
@@ -66,7 +78,7 @@ def main():
         result = inference(weights, biases, i).item()
         print(f"Inference result for {i}: {result}")
 
-    axes[0].scatter(x=inputs[:, 0], y=inputs[:, 1], c="blue", s=6)
+    axes[0].scatter(x=inputs[:, 0], y=inputs[:, 1], c="orange", s=12)
 
     steps = np.arange(0, l.shape[1])
     axes[1].plot(steps, l[0, :], color="blue")
@@ -118,7 +130,7 @@ def neural_net(data: np.ndarray) -> NeuralNetResult:
     weights.append(rng.uniform(low=-1, high=1, size=(1, hidden_layer_neurons)))
     biases.append(np.array([0.67]))
 
-    for i in range(500):
+    for i in range(STEPS):
         # Forward Pass
         x = data[:, :2]
         out = x.T
@@ -173,6 +185,9 @@ def neural_net(data: np.ndarray) -> NeuralNetResult:
         if validation_l < smallest_validation_loss:
             smallest_validation_loss_step = i
             smallest_validation_loss = validation_l
+        else:
+            print(f"EXIT AT: {i}")
+            break
 
 
     print(f"Smallest validation loss at step {smallest_validation_loss_step}: {smallest_validation_loss}")
@@ -189,6 +204,9 @@ def tanh_gradient(v: np.ndarray) -> np.ndarray:
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
+
+def logit(x):
+    return np.log(x / 1-x)
 
 
 if __name__ == "__main__":
