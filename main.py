@@ -10,11 +10,11 @@ from pydantic_numpy.typing import NpNDArray
 
 N = 5000
 BATCH_SIZE = 120
-EPOCHS = 250
+EPOCHS = 200
 VALIDATION_SET_PERCENT = 0.2
 EPOCHS_PATIENCE = 3
 LR = 0.5
-LR_DECAY_RATE = 0.00015
+LR_DECAY_RATE = 0.0001
 HIDDEN_LAYERS = 2
 HIDDEN_LAYER_NEURONS = 6
 
@@ -34,7 +34,7 @@ def inference(weights: list, biases: list, input: np.ndarray) -> np.ndarray:
         if j == layers - 1:
             out = sigmoid(out)
         else:
-            out = np.tanh(out)
+            out = np.maximum(0, out)
 
     return np.squeeze(out)
 
@@ -64,13 +64,16 @@ def neural_net(data: np.ndarray) -> NeuralNetResult:
 
     patience_count = 0
 
+    # Initialization
     for i in range(hidden_layer_count):
         inputs = hidden_layer_neurons if i > 0 else feature_count
-        weights.append(rng.uniform(low=-1, high=1, size=(hidden_layer_neurons, inputs)))
-        biases.append(rng.uniform(low=-1, high=1, size=hidden_layer_neurons))
+        weights.append(rng.standard_normal((hidden_layer_neurons, inputs)) * np.sqrt(2.0 / inputs))
+        biases.append(np.zeros(hidden_layer_neurons, dtype=np.float64))
 
-    weights.append(rng.uniform(low=-1, high=1, size=(1, hidden_layer_neurons)))
-    biases.append(np.array([0.67]))
+    weights.append(rng.standard_normal((1, hidden_layer_neurons)) * np.sqrt(2.0 / hidden_layer_neurons))
+    biases.append(np.array([0], dtype=np.float64))
+
+    # Training
 
     steps_per_epoch = math.ceil(training_set_size / BATCH_SIZE)
     steps = EPOCHS * steps_per_epoch
@@ -102,13 +105,13 @@ def neural_net(data: np.ndarray) -> NeuralNetResult:
                 z_grad = (sigmoid(z_layers[li]) - batch_y) / batch_x.shape[0]
                 z_grad = z_grad.T
             else:
-                z_grad = tanh_gradient(z_layers[li].T) * a_in_grad
+                z_grad = relu_gradient(z_layers[li].T) * a_in_grad
 
             b_grad = z_grad.sum(axis=0)
             biases[li] -= b_grad * lr
 
             if li > 0:
-                a_prev = np.tanh(z_layers[li - 1]).T
+                a_prev = np.maximum(0, z_layers[li - 1]).T
                 a_in_grad = z_grad @ weights[li]
             else:
                 a_prev = batch_x
@@ -163,7 +166,7 @@ def forward_pass(x: np.ndarray, weights: list[np.ndarray], biases: list[np.ndarr
         if j == layers - 1:
             out = sigmoid(out)
         else:
-            out = np.tanh(out)
+            out = np.maximum(0, out)
 
     return z_layers, out
 
@@ -171,8 +174,8 @@ def forward_pass(x: np.ndarray, weights: list[np.ndarray], biases: list[np.ndarr
 def loss(gt: np.ndarray, out: np.ndarray) -> float:
     return -(gt * np.log(out) + (1 - gt) * np.log(1 - out)).mean()
 
-def tanh_gradient(v: np.ndarray) -> np.ndarray:
-    return (1 - np.square(np.tanh(v)))
+def relu_gradient(v: np.ndarray) -> np.ndarray:
+    return np.where(v <= 0, 0, 1)
 
 def sigmoid(x):
     return 1 / (1 + np.exp(-x))
